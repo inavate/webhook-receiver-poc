@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inavate Webhook Receiver & Inspector (Go Edition)</title>
+    <!-- Inavate Portal Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,300..800;1,6..12,300..800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navbar (Portal Header Style) -->
+        <header class="navbar">
+            <div class="nav-brand">
+                <div class="brand-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+                <div>
+                    <h1>Inavate Webhooks</h1>
+                    <span class="brand-subtitle">Developer Reference Receiver & Inspector</span>
+                </div>
+            </div>
+            <div class="nav-status">
+                <span class="status-indicator live"></span>
+                <span class="status-text">Listening on <code>POST /webhook</code></span>
+                <span class="badge-go"><i class="fa-brands fa-golang"></i> Go Standalone</span>
+            </div>
+        </header>
+
+        <!-- KPI Summary Metric Tiles -->
+        <section class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-icon blue"><i class="fa-solid fa-inbox"></i></div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Total Received Events</span>
+                    <span class="kpi-value" id="kpiTotalEvents">0</span>
+                    <span class="kpi-hint">Live Session Dispatches</span>
+                </div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-icon green"><i class="fa-solid fa-shield-check"></i></div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Verified Signatures</span>
+                    <span class="kpi-value" id="kpiVerifiedEvents">0</span>
+                    <span class="kpi-hint">HMAC-SHA256 Match</span>
+                </div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-icon red"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Rejected / Tampered</span>
+                    <span class="kpi-value" id="kpiRejectedEvents">0</span>
+                    <span class="kpi-hint">Invalid or Expired</span>
+                </div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-icon amber"><i class="fa-solid fa-clock"></i></div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Last Event Received</span>
+                    <span class="kpi-value" id="kpiLastEventTime" style="font-size: 1.1rem;">None Yet</span>
+                    <span class="kpi-hint">Realtime Ingestion</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Secret Configuration & Test Bar -->
+        <section class="card config-card">
+            <div class="config-header">
+                <div>
+                    <h2><i class="fa-solid fa-key"></i> Shared Webhook Secret & Quick Test</h2>
+                    <p>This secret is used to compute and verify the HMAC-SHA256 signatures in <code>X-Inavate-Signature</code>.</p>
+                </div>
+                <div class="simulator-actions">
+                    <select id="simEventType" class="form-select">
+                        <option value="transaction.status_changed">transaction.status_changed (Completed)</option>
+                        <option value="transaction.returned_nsf">transaction.status_changed (Returned NSF)</option>
+                        <option value="transaction.created">transaction.created (Pending Sale)</option>
+                        <option value="batch.completed">batch.completed</option>
+                    </select>
+                    <button type="button" class="btn btn-primary" onclick="simulateEvent(false)">
+                        <i class="fa-solid fa-paper-plane"></i> Send Valid Event
+                    </button>
+                    <button type="button" class="btn btn-warning" onclick="simulateEvent(true)" title="Send event with tampered signature to test rejection">
+                        <i class="fa-solid fa-shield-virus"></i> Test Tampered Sig
+                    </button>
+                </div>
+            </div>
+
+            <div class="secret-input-row">
+                <div class="input-with-button">
+                    <input type="text" id="secretInput" class="form-input mono" placeholder="Enter webhook secret..." spellcheck="false">
+                    <button type="button" class="btn btn-primary" onclick="updateSecret()">
+                        <i class="fa-solid fa-floppy-disk"></i> Apply Secret
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="copySecret()" title="Copy Secret">
+                        <i class="fa-solid fa-copy"></i> Copy
+                    </button>
+                </div>
+                <div class="url-helper">
+                    <span class="helper-label">Receiver URL:</span>
+                    <code id="receiverUrlDisplay" class="mono">http://localhost:8004/webhook</code>
+                    <button type="button" class="btn btn-xs btn-secondary" onclick="copyReceiverUrl()" title="Copy URL">
+                        <i class="fa-solid fa-copy"></i> Copy
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Workspace: Event Log and Inspector -->
+        <div class="workspace-grid">
+            <!-- Left Panel: Event List Feed -->
+            <section class="card event-list-card">
+                <div class="card-header-flex">
+                    <div class="card-title-group">
+                        <h3><i class="fa-solid fa-list-check"></i> Received Webhooks</h3>
+                        <span class="count-badge" id="eventCountBadge">0 events</span>
+                    </div>
+                    <button type="button" class="btn btn-xs btn-secondary" onclick="clearEventList()" title="Clear view">
+                        <i class="fa-solid fa-trash"></i> Clear
+                    </button>
+                </div>
+
+                <div class="event-feed" id="eventFeed">
+                    <div class="empty-state" id="emptyState">
+                        <div class="empty-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+                        <h4>Awaiting Webhook Events...</h4>
+                        <p>Configure a webhook in the Inavate Portal pointing to this endpoint (or via ngrok) or click <strong>"Send Valid Event"</strong> above to test locally.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Deep Inspector -->
+            <section class="card inspector-card" id="inspectorCard">
+                <div class="card-header-flex">
+                    <div class="card-title-group">
+                        <h3><i class="fa-solid fa-magnifying-glass-chart"></i> Event Inspector</h3>
+                        <span id="inspectingEventIdBadge" class="mono-badge">—</span>
+                    </div>
+                    <div class="inspector-tabs">
+                        <button type="button" class="tab-btn active" onclick="switchInspectorTab('payload')">JSON Payload</button>
+                        <button type="button" class="tab-btn" onclick="switchInspectorTab('headers')">Headers</button>
+                        <button type="button" class="tab-btn" onclick="switchInspectorTab('crypto')">Verification Audit</button>
+                    </div>
+                </div>
+
+                <div id="inspectorContent" class="inspector-content">
+                    <div class="inspector-placeholder">
+                        <i class="fa-solid fa-hand-pointer"></i>
+                        <p>Select a webhook event from the left panel to inspect parameters, security verification logs, and raw payload data.</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Integration Code Guide Section -->
+        <section class="card docs-card">
+            <div class="card-header-flex">
+                <div>
+                    <h2 style="font-size:1.15rem; font-weight:700; color:var(--secondary-color); display:flex; align-items:center; gap:8px;">
+                        <i class="fa-solid fa-code" style="color:var(--primary-color);"></i> Integration Recipe (Copy & Paste Reference)
+                    </h2>
+                    <p style="font-size:0.88rem; color:var(--text-color); margin-top:4px;">How to verify Inavate webhook signatures in your own applications:</p>
+                </div>
+                <div class="lang-tabs">
+                    <button type="button" class="lang-tab-btn active" onclick="switchCodeLang('go')">Go</button>
+                    <button type="button" class="lang-tab-btn" onclick="switchCodeLang('nodejs')">Node.js</button>
+                    <button type="button" class="lang-tab-btn" onclick="switchCodeLang('python')">Python</button>
+                </div>
+            </div>
+
+            <!-- Go Snippet -->
+            <div class="code-snippet-box" id="code-go">
+<pre><code><span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"crypto/hmac"</span>
+    <span class="str">"crypto/sha256"</span>
+    <span class="str">"crypto/subtle"</span>
+    <span class="str">"encoding/hex"</span>
+    <span class="str">"io"</span>
+    <span class="str">"math"</span>
+    <span class="str">"net/http"</span>
+    <span class="str">"strconv"</span>
+    <span class="str">"time"</span>
+)
+
+<span class="kw">func</span> <span class="fn">handleWebhook</span>(w http.ResponseWriter, r *http.Request) {
+    <span class="cmt">// 1. CRITICAL: Capture the exact RAW body bytes before any JSON parsing</span>
+    rawBody, err := io.ReadAll(r.Body)
+    <span class="kw">if</span> err != nil {
+        http.Error(w, <span class="str">"Failed to read body"</span>, http.StatusBadRequest)
+        <span class="kw">return</span>
+    }
+
+    timestamp := r.Header.Get(<span class="str">"X-Inavate-Timestamp"</span>)
+    signature := r.Header.Get(<span class="str">"X-Inavate-Signature"</span>)
+
+    <span class="cmt">// 2. Replay protection: Verify timestamp freshness (drift &lt;= 300 seconds)</span>
+    tsInt, _ := strconv.ParseInt(timestamp, 10, 64)
+    <span class="kw">if</span> math.Abs(float64(time.Now().Unix() - tsInt)) &gt; 300 {
+        http.Error(w, <span class="str">"Timestamp expired"</span>, http.StatusBadRequest)
+        <span class="kw">return</span>
+    }
+
+    <span class="cmt">// 3. Compute expected HMAC-SHA256 signature</span>
+    sigPayload := timestamp + <span class="str">"."</span> + string(rawBody)
+    mac := hmac.New(sha256.New, []byte(<span class="str">"YOUR_WEBHOOK_SECRET"</span>))
+    mac.Write([]byte(sigPayload))
+    expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+    <span class="cmt">// 4. Constant-time comparison to prevent timing attacks</span>
+    <span class="kw">if</span> subtle.ConstantTimeCompare([]byte(signature), []byte(expectedSig)) != 1 {
+        http.Error(w, <span class="str">"Invalid signature"</span>, http.StatusUnauthorized)
+        <span class="kw">return</span>
+    }
+
+    <span class="cmt">// 5. Acknowledge with 200 OK immediately</span>
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(<span class="str">`{"status":"acknowledged"}`</span>))
+}</code></pre>
+            </div>
+
+            <!-- Node.js Snippet -->
+            <div class="code-snippet-box hidden" id="code-nodejs">
+<pre><code><span class="kw">const</span> express = require(<span class="str">'express'</span>);
+<span class="kw">const</span> crypto = require(<span class="str">'crypto'</span>);
+<span class="kw">const</span> app = express();
+
+<span class="cmt">// 1. CRITICAL: Capture raw body buffer via express.raw</span>
+app.post(<span class="str">'/webhook'</span>, express.raw({ type: <span class="str">'application/json'</span> }), (req, res) =&gt; {
+    <span class="kw">const</span> rawBody = req.body.toString(<span class="str">'utf8'</span>);
+    <span class="kw">const</span> timestamp = req.headers[<span class="str">'x-inavate-timestamp'</span>];
+    <span class="kw">const</span> signature = req.headers[<span class="str">'x-inavate-signature'</span>];
+
+    <span class="cmt">// 2. Replay check (within 300s)</span>
+    <span class="kw">const</span> now = Math.floor(Date.now() / 1000);
+    <span class="kw">if</span> (Math.abs(now - parseInt(timestamp, 10)) &gt; 300) {
+        <span class="kw">return</span> res.status(400).send(<span class="str">'Timestamp expired'</span>);
+    }
+
+    <span class="cmt">// 3. Compute HMAC-SHA256</span>
+    <span class="kw">const</span> sigPayload = `${timestamp}.${rawBody}`;
+    <span class="kw">const</span> expectedSig = crypto
+        .createHmac(<span class="str">'sha256'</span>, process.env.WEBHOOK_SECRET)
+        .update(sigPayload)
+        .digest(<span class="str">'hex'</span>);
+
+    <span class="cmt">// 4. Constant-time comparison</span>
+    <span class="kw">const</span> isValid = crypto.timingSafeEqual(
+        Buffer.from(signature, <span class="str">'hex'</span>),
+        Buffer.from(expectedSig, <span class="str">'hex'</span>)
+    );
+    <span class="kw">if</span> (!isValid) <span class="kw">return</span> res.status(401).send(<span class="str">'Invalid signature'</span>);
+
+    <span class="cmt">// 5. Return 200 OK</span>
+    res.status(200).json({ status: <span class="str">'acknowledged'</span> });
+});</code></pre>
+            </div>
+
+            <!-- Python Snippet -->
+            <div class="code-snippet-box hidden" id="code-python">
+<pre><code><span class="kw">import</span> hmac, hashlib, time
+<span class="kw">from</span> flask <span class="kw">import</span> Flask, request, jsonify
+
+app = Flask(__name__)
+
+<span class="cmt"># 1. Capture raw request bytes</span>
+@app.route(<span class="str">'/webhook'</span>, methods=[<span class="str">'POST'</span>])
+<span class="kw">def</span> <span class="fn">webhook</span>():
+    raw_body = request.get_data(as_text=<span class="kw">True</span>)
+    timestamp = request.headers.get(<span class="str">'X-Inavate-Timestamp'</span>)
+    signature = request.headers.get(<span class="str">'X-Inavate-Signature'</span>)
+
+    <span class="cmt"># 2. Replay check (within 300s)</span>
+    <span class="kw">if</span> abs(time.time() - int(timestamp)) &gt; 300:
+        <span class="kw">return</span> <span class="str">"Timestamp expired"</span>, 400
+
+    <span class="cmt"># 3. Compute HMAC-SHA256</span>
+    sig_payload = f<span class="str">"{timestamp}.{raw_body}"</span>
+    expected_sig = hmac.new(
+        b<span class="str">"YOUR_WEBHOOK_SECRET"</span>,
+        sig_payload.encode(<span class="str">'utf-8'</span>),
+        hashlib.sha256
+    ).hexdigest()
+
+    <span class="cmt"># 4. Constant-time compare</span>
+    <span class="kw">if</span> <span class="kw">not</span> hmac.compare_digest(signature, expected_sig):
+        <span class="kw">return</span> <span class="str">"Invalid signature"</span>, 401
+
+    <span class="cmt"># 5. Return 200 OK</span>
+    <span class="kw">return</span> jsonify({<span class="str">"status"</span>: <span class="str">"acknowledged"</span>}), 200</code></pre>
+            </div>
+        </section>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
